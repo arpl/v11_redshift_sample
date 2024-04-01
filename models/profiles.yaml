@@ -1,0 +1,80 @@
+models:
+  - name: id_graph_users
+    model_type: id_stitcher
+    model_spec:
+      validity_time: 24h # 1 day
+      entity_key: users
+      materialization:
+        run_type: incremental
+      edge_sources:
+        - from: inputs/rsIdentifies
+        - from: inputs/rsTracks
+        - from: inputs/rsPages
+
+  - name: knownUsers
+    model_type: entity_cohort
+    model_spec:
+      extends: users/all
+      materialization:
+        output_type: table
+      filter_pipeline:
+        # exclude ids which don't have any other_id_type of email
+        - type: include
+          value: "{{ users.Var('user_email') }} != ''"
+
+  - name: user_profiles
+    model_type: feature_table_model
+    model_spec:
+      validity_time: 24h # 1 day
+      entity_cohort: models/knownUsers
+      features:
+        - first_activity_time_daily
+        - last_session_activity_time_daily
+        - campaign_name_daily
+        - campaign_medium_daily
+
+var_groups:
+  - name: user_all_vars
+    entity_key: users
+    vars:
+      - entity_var:
+          name: user_email
+          from: inputs/rsIdentifies
+          select: first_value(email)
+          where: email is not null and email != ''
+          window:
+            order_by:
+              - timestamp desc
+            frame_clause: rows between unbounded preceding and unbounded following
+
+  - name: user_known_daily_vars
+    entity_cohort: models/knownUsers
+    vars:
+      - entity_var:
+          name: first_activity_time_daily
+          select: min(timestamp)
+          from: inputs/rsTracks
+          description: First Activity Time
+      - entity_var:
+          name: last_session_activity_time_daily
+          select: max(timestamp)
+          from: models/session_activity
+          description: Last Session Activity Time
+      - entity_var:
+          name: campaign_name_daily
+          select: first_value(context_campaign_name)
+          from: models/marketing_pages
+          window:
+            order_by:
+              - timestamp desc
+            frame_clause: rows between unbounded preceding and unbounded following
+          description: context campaign name
+      - entity_var:
+          name: campaign_medium_daily
+          select: first_value(context_campaign_medium)
+          from: models/marketing_pages
+          window:
+            order_by:
+              - timestamp desc
+            frame_clause: rows between unbounded preceding and unbounded following
+          description: context campaign medium
